@@ -7,6 +7,7 @@ import {
   assignments,
   chatGroups,
   chatParticipants,
+  messages,
   roles,
   studentPerformance,
   userRelationships,
@@ -18,7 +19,7 @@ import { param } from "../lib/http.js";
 import { authenticate } from "../middleware/authenticate.js";
 import { requirePermission } from "../middleware/require-permission.js";
 import { isTutorOf, listRelatedStudentIds, scopeStudent } from "../middleware/scope-student.js";
-import { buildDeepLink } from "../services/telegram.js";
+import { buildDeepLink, leaveChat } from "../services/telegram.js";
 
 export const studentsRouter = Router();
 studentsRouter.use(authenticate);
@@ -200,6 +201,10 @@ studentsRouter.get("/:id", requirePermission("students:read"), async (req, res, 
       suggestedAssignments: assignmentRows.filter((a) => a.status === "suggested"),
       performance,
       chatGroup: group ? { id: group.id, telegramLinked: group.telegramChatId !== null } : null,
+      // The client re-renders the group-creation steps here whenever the link
+      // is still pending, so the tutor is never stuck with a toast they
+      // dismissed at creation time being the only place the /start lives.
+      telegramDeepLink: buildDeepLink(student.id),
     });
   } catch (err) {
     next(err);
@@ -242,16 +247,59 @@ studentsRouter.patch("/:id", requirePermission("students:write"), async (req, re
   }
 });
 
-/** DELETE /students/:id — soft delete (users.is_active = false). */
+/**
+ * DELETE /students/:id — removes the student and everything hanging off them.
+ *
+ * Deliberately a hard delete, not the is_active flag it used to set: a tutor
+ * who removes a student expects the roster row, the chat, the transcript and
+ * the performance history to be gone, and a soft-deleted student still holds
+ * the unique (owner, student) chat room and their Telegram user id hostage.
+ *
+ * Every child table cascades from users.id, so the DELETE alone would do it —
+ * but messages.sender_user_id has no ON DELETE clause, which only happens to
+ * work because those messages are also cascaded from the group. That is too
+ * subtle to rely on, so the rows come out explicitly, in FK order, in one
+ * transaction.
+ *
+ * Guardians are users in their own right and may guard other students, so they
+ * survive — only the relationship rows linking them here are removed.
+ */
 studentsRouter.delete("/:id", requirePermission("students:write"), async (req, res, next) => {
   try {
-    const kinds = await scopeStudent(req.user!, param(req, "id"));
+    const studentId = param(req, "id");
+    const kinds = await scopeStudent(req.user!, studentId);
     if (!isTutorOf(kinds)) throw badRequest("Only the owning tutor can remove a student");
 
-    await db
-      .update(users)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(users.id, param(req, "id")));
+    const groups = await db
+      .select({ id: chatGroups.id, telegramChatId: chatGroups.telegramChatId })
+      .from(chatGroups)
+      .where(eq(chatGroups.studentUserId, studentId));
+    const groupIds = groups.map((g) => g.id);
+
+    await db.transaction(async (tx) => {
+      if (groupIds.length > 0) {
+        await tx.delete(messages).where(inArray(messages.chatGroupId, groupIds));
+        await tx
+          .delete(chatParticipants)
+          .where(inArray(chatParticipants.chatGroupId, groupIds));
+        await tx.delete(chatGroups).where(inArray(chatGroups.id, groupIds));
+      }
+      await tx.delete(assignments).where(eq(assignments.studentUserId, studentId));
+      await tx
+        .delete(studentPerformance)
+        .where(eq(studentPerformance.studentUserId, studentId));
+      await tx
+        .delete(userRelationships)
+        .where(eq(userRelationships.toUserId, studentId));
+      await tx.delete(userRoles).where(eq(userRoles.userId, studentId));
+      await tx.delete(users).where(eq(users.id, studentId));
+    });
+
+    // After the commit — a Telegram hiccup must not roll back a delete that
+    // already succeeded, and the webhook has nothing left to bind to anyway.
+    for (const g of groups) {
+      if (g.telegramChatId !== null) await leaveChat(g.telegramChatId);
+    }
 
     res.status(204).end();
   } catch (err) {

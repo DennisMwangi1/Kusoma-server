@@ -94,6 +94,22 @@ export async function requestParentContact(chatId: number): Promise<void> {
 }
 
 /**
+ * Drop the bot out of a group so the room stops mirroring — used when a
+ * student is deleted. Best-effort: the group may already be gone, the bot may
+ * already have been kicked, or Telegram may not be configured at all, and none
+ * of those should fail the delete that triggered this.
+ */
+export async function leaveChat(chatId: number): Promise<void> {
+  const b = getBot();
+  if (!b) return;
+  try {
+    await b.api.leaveChat(chatId);
+  } catch (err) {
+    console.warn(`telegram: leaveChat(${chatId}) failed`, err);
+  }
+}
+
+/**
  * Resolve a Telegram file_id to a temporary download URL.
  *
  * Used by services/attachments.ts to get bytes for Bedrock, which cannot take

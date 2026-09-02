@@ -212,6 +212,15 @@ async function main(): Promise<void> {
     assert(status === 200, `HTTP ${status} ${summarize(body)}`);
   });
 
+  await test("GET /chats (tutor groups)", async () => {
+    const { status, body } = await json(`${SERVER}/chats`, { headers: auth() });
+    const b = body as { data?: { studentUserId?: string; title?: string }[] };
+    assert(status === 200 && Array.isArray(b.data) && b.data.length > 0, `HTTP ${status} ${summarize(body)}`);
+    const id = students[7]?.id;
+    assert(b.data!.some((c) => c.studentUserId === id && c.title), summarize(body));
+    return `n=${b.data!.length}`;
+  });
+
   await test("GET /students/:id/messages", async () => {
     const id = students[7]?.id;
     const { status, body } = await json(`${SERVER}/students/${id}/messages`, { headers: auth() });
