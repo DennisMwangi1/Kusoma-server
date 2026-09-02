@@ -61,6 +61,13 @@ export interface MessageOutbound {
   persisted?: boolean;
 }
 
+/** Emitted by Analytics after student_performance is upserted (§9.2 ordering). */
+export interface PerformanceRecorded {
+  chatGroupId: string;
+  studentUserId: string;
+  performance: PerformanceSignal;
+}
+
 export interface AssignmentSuggested {
   assignmentId: string;
   studentUserId: string;

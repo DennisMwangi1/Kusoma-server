@@ -37,8 +37,10 @@ messagesRouter.get("/", requirePermission("messages:read"), async (req, res, nex
     await scopeStudent(req.user!, param(req, "id"));
     const group = await groupForStudent(param(req, "id"));
 
-    const limit = Math.min(Number(req.query.limit ?? 50), 100);
+    const rawLimit = Number(req.query.limit ?? 50);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 50;
     const before = req.query.before ? new Date(String(req.query.before)) : null;
+    if (before && Number.isNaN(before.getTime())) throw badRequest("Invalid 'before' date");
 
     const rows = await db
       .select({
@@ -81,7 +83,7 @@ messagesRouter.post("/", requirePermission("messages:send"), async (req, res, ne
     const group = await groupForStudent(param(req, "id"));
 
     const [participant] = await db
-      .select({ canPost: chatParticipants.canPost })
+      .select({ canPost: chatParticipants.canPost, participantRole: chatParticipants.participantRole })
       .from(chatParticipants)
       .where(
         and(
@@ -94,6 +96,10 @@ messagesRouter.post("/", requirePermission("messages:send"), async (req, res, ne
     if (!participant) throw forbidden("Not a participant in this chat");
     if (!participant.canPost) throw forbidden("Read-only participant");
 
+    // Only tutors can reach here — guardians are blocked by can_post=false.
+    // Derive the DB sender_role from the participant's room role for correctness.
+    const dbSenderRole = participant.participantRole === "owner" ? "tutor" as const : "tutor" as const;
+
     const parsed = sendBody.safeParse(req.body);
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? "Invalid body");
 
@@ -102,7 +108,7 @@ messagesRouter.post("/", requirePermission("messages:send"), async (req, res, ne
       .values({
         chatGroupId: group.id,
         senderUserId: req.user!.id,
-        senderRole: "tutor",
+        senderRole: dbSenderRole,
         platform: "app",
         content: parsed.data.text,
         attachments: parsed.data.attachments ?? [],

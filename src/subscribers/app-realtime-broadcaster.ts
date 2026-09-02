@@ -1,4 +1,4 @@
-import type { MessageInbound, MessageOutbound } from "../events/types.js";
+import type { AssignmentSuggested, MessageInbound, MessageOutbound } from "../events/types.js";
 import type { Broker, Message } from "../pkg/broker/broker.js";
 import { Topics } from "../pkg/broker/broker.js";
 import { subscribeWithRetry } from "../pkg/broker/retry.js";
@@ -30,6 +30,10 @@ export async function registerAppRealtimeBroadcaster(broker: Broker): Promise<vo
 
   await subscribeWithRetry(broker, Topics.MessageOutbound, "app-realtime", async (msg: Message) => {
     const e = msg.payload as MessageOutbound;
+    // TelegramSender republishes persisted tutor messages solely to stamp
+    // telegramMessageId. The original event already went out over WS.
+    if (e.persisted && e.telegramMessageId) return;
+
     hub.broadcast(e.chatGroupId, "message", {
       chatGroupId: e.chatGroupId,
       senderUserId: e.senderUserId,
@@ -38,6 +42,18 @@ export async function registerAppRealtimeBroadcaster(broker: Broker): Promise<vo
       content: e.text,
       attachments: e.attachments ?? [],
       createdAt: new Date(),
+    });
+  });
+
+  // Surface AI-suggested assignments to connected tutors in real time (§9.2).
+  await subscribeWithRetry(broker, Topics.AssignmentSuggested, "app-realtime", async (msg: Message) => {
+    const e = msg.payload as AssignmentSuggested;
+    // Broadcast to every room for this student — the tutor will see the
+    // assignment_update frame on the Student Detail view.
+    hub.broadcastToUser(e.ownerUserId, "assignment_update", {
+      assignmentId: e.assignmentId,
+      studentUserId: e.studentUserId,
+      rationale: e.rationale,
     });
   });
 }

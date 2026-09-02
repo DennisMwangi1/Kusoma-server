@@ -65,7 +65,9 @@ studentsRouter.get("/", requirePermission("students:read"), async (req, res, nex
     const ids = await listRelatedStudentIds(req.user!);
     if (ids.length === 0) return res.json({ data: [] });
 
-    const rows = await db.select().from(users).where(inArray(users.id, ids));
+    const rows = await db.select().from(users).where(
+      and(inArray(users.id, ids), eq(users.isActive, true)),
+    );
 
     // Active assignment per student, for the dashboard's "current topic".
     const active = await db
@@ -225,7 +227,16 @@ studentsRouter.patch("/:id", requirePermission("students:write"), async (req, re
       .where(eq(users.id, param(req, "id")))
       .returning();
 
-    res.json({ student: updated });
+    res.json({
+      student: {
+        id: updated!.id,
+        displayName: updated!.displayName,
+        grade: updated!.grade,
+        phone: updated!.phone,
+        isActive: updated!.isActive,
+        telegramLinked: updated!.telegramUserId !== null,
+      },
+    });
   } catch (err) {
     next(err);
   }

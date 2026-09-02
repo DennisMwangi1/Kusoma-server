@@ -13,6 +13,7 @@ import {
 } from "../db/schema.js";
 import type { MessageInbound } from "../events/types.js";
 import { Topics } from "../pkg/broker/broker.js";
+import { sendMessage } from "../services/telegram.js";
 
 export const telegramWebhookRouter = Router();
 
@@ -117,9 +118,66 @@ telegramWebhookRouter.post("/telegram", async (req, res) => {
     // /start {studentUserId} — bind the room, don't create one.
     const startMatch = /^\/start\s+([0-9a-f-]{36})$/i.exec(text.trim());
     if (startMatch) {
-      await bindChat(startMatch[1]!, msg.chat.id, msg.chat.title);
-      // TODO(phase-3): send the welcome message into the group.
+      const studentUserId = startMatch[1]!;
+      await bindChat(studentUserId, msg.chat.id, msg.chat.title);
+
+      const [student] = await db
+        .select({ displayName: users.displayName })
+        .from(users)
+        .where(eq(users.id, studentUserId))
+        .limit(1);
+      const name = student?.displayName ?? "student";
+      await sendMessage(
+        msg.chat.id,
+        `👋 Welcome to Kusoma! This group is now linked for ${name}.\n\n` +
+          `The AI tutor will respond to the student's messages here. ` +
+          `Type /help for available commands.`,
+      );
       return;
+    }
+
+    // Convenience commands — handled before the Router fires (§7).
+    if (text.startsWith("/")) {
+      const cmd = text.split(/\s/)[0]!.toLowerCase();
+      if (cmd === "/help") {
+        await sendMessage(
+          msg.chat.id,
+          "📚 *Kusoma Bot Commands*\n\n" +
+            "/status — Check student progress\n" +
+            "/assign — Manage assignments (use the Kusoma app)\n" +
+            "/help — Show this help message\n\n" +
+            "Students: just send your questions and I'll help!",
+        );
+        return;
+      }
+      if (cmd === "/status") {
+        const [group] = await db
+          .select()
+          .from(chatGroups)
+          .where(eq(chatGroups.telegramChatId, msg.chat.id))
+          .limit(1);
+        if (group) {
+          const [student] = await db
+            .select({ displayName: users.displayName, grade: users.grade })
+            .from(users)
+            .where(eq(users.id, group.studentUserId))
+            .limit(1);
+          await sendMessage(
+            msg.chat.id,
+            `📊 *Student:* ${student?.displayName ?? "Unknown"}\n` +
+              `*Grade:* ${student?.grade ?? "N/A"}\n\n` +
+              `Open the Kusoma app for detailed performance data.`,
+          );
+        }
+        return;
+      }
+      if (cmd === "/assign") {
+        await sendMessage(
+          msg.chat.id,
+          "📘 To assign or change a topic, open the Kusoma app → Student Detail → Change Topic.",
+        );
+        return;
+      }
     }
 
     const [group] = await db
@@ -133,8 +191,29 @@ telegramWebhookRouter.post("/telegram", async (req, res) => {
     let sender = await resolveSender(msg.from.id);
 
     // Lazy capture (§7, §15): the first message from an unknown Telegram
-    // account in a linked group claims the student slot if it is still empty.
+    // account in a linked group claims the matching slot if it is still empty.
+    // Try the tutor (owner) first, then the student — both get their
+    // telegram_user_id set on their first message in a linked group, never
+    // required at registration.
     if (!sender) {
+      // Try claiming the tutor (owner) slot.
+      const [owner] = await db
+        .select({ id: users.id, telegramUserId: users.telegramUserId })
+        .from(users)
+        .where(eq(users.id, group.ownerUserId))
+        .limit(1);
+
+      if (owner && owner.telegramUserId === null && msg.from.id) {
+        await db
+          .update(users)
+          .set({ telegramUserId: msg.from.id, updatedAt: new Date() })
+          .where(eq(users.id, owner.id));
+        sender = { id: owner.id, role: "tutor" };
+      }
+    }
+
+    if (!sender) {
+      // Try claiming the student slot.
       const [student] = await db
         .select({ id: users.id, telegramUserId: users.telegramUserId })
         .from(users)

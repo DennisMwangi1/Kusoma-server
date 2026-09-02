@@ -71,7 +71,7 @@ async function main(): Promise<void> {
 
   server.listen(env.port, () => {
     console.log(`kusoma-server listening on :${env.port}`);
-    console.log(`  bedrock: ${env.bedrock.modelId} @ ${env.bedrock.region}`);
+    console.log(`  anthropic: ${env.anthropic.modelId}`);
   });
 
   // Best-effort: never let an unreachable Telegram stop the server booting.

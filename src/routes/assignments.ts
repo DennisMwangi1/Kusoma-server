@@ -3,12 +3,13 @@ import { and, desc, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "../db/client.js";
-import { assignments } from "../db/schema.js";
+import { assignments, chatGroups } from "../db/schema.js";
 import { badRequest, notFound } from "../lib/errors.js";
 import { param } from "../lib/http.js";
 import { authenticate } from "../middleware/authenticate.js";
 import { requirePermission } from "../middleware/require-permission.js";
 import { scopeStudent } from "../middleware/scope-student.js";
+import { sendMessage } from "../services/telegram.js";
 
 export const assignmentsRouter = Router({ mergeParams: true });
 assignmentsRouter.use(authenticate);
@@ -42,6 +43,25 @@ async function activate(studentUserId: string, assignmentId: string) {
   });
 }
 
+/** Announce a new/accepted topic into the linked Telegram group (§7). */
+async function announceToTelegram(studentUserId: string, assignment: { strand: string; subStrand: string; learningOutcome: string }): Promise<void> {
+  try {
+    const [group] = await db
+      .select({ telegramChatId: chatGroups.telegramChatId })
+      .from(chatGroups)
+      .where(eq(chatGroups.studentUserId, studentUserId))
+      .limit(1);
+    if (!group?.telegramChatId) return;
+    await sendMessage(
+      group.telegramChatId,
+      `📘 New topic: ${assignment.strand} — ${assignment.subStrand}\n` +
+        `Learning outcome: ${assignment.learningOutcome}`,
+    );
+  } catch (err) {
+    console.error("assignments: telegram announcement failed", err);
+  }
+}
+
 /** GET — history, including 'suggested' ones. Guardians can read this. */
 assignmentsRouter.get("/", requirePermission("assignments:read"), async (req, res, next) => {
   try {
@@ -64,20 +84,32 @@ assignmentsRouter.post("/", requirePermission("assignments:write"), async (req, 
     const parsed = createBody.safeParse(req.body);
     if (!parsed.success) throw badRequest(parsed.error.issues[0]?.message ?? "Invalid body");
 
-    const [created] = await db
-      .insert(assignments)
-      .values({
-        studentUserId: param(req, "id"),
-        ...parsed.data,
-        source: "tutor",
-        status: "suggested", // flipped to active by activate(), pausing the prior one
-      })
-      .returning();
+    const studentId = param(req, "id");
+    const assignment = await db.transaction(async (tx) => {
+      // Pause any currently active assignment for this student.
+      await tx
+        .update(assignments)
+        .set({ status: "paused" })
+        .where(
+          and(
+            eq(assignments.studentUserId, studentId),
+            eq(assignments.status, "active"),
+          ),
+        );
 
-    const assignment = await activate(param(req, "id"), created!.id);
+      const [created] = await tx
+        .insert(assignments)
+        .values({
+          studentUserId: studentId,
+          ...parsed.data,
+          source: "tutor",
+          status: "active",
+        })
+        .returning();
+      return created!;
+    });
 
-    // TODO(phase-5): announce the new topic into the chat group so the student
-    // sees it in Telegram rather than it being a silent DB write (§7).
+    void announceToTelegram(studentId, assignment);
     res.status(201).json({ assignment });
   } catch (err) {
     next(err);
@@ -100,7 +132,11 @@ assignmentsRouter.post(
       if (!row || row.studentUserId !== param(req, "id")) throw notFound("Assignment not found");
       if (row.status !== "suggested") throw badRequest("Only a suggested assignment can be accepted");
 
-      res.json({ assignment: await activate(param(req, "id"), row.id) });
+      const accepted = await activate(param(req, "id"), row.id);
+      if (accepted) {
+        void announceToTelegram(param(req, "id"), accepted);
+      }
+      res.json({ assignment: accepted });
     } catch (err) {
       next(err);
     }

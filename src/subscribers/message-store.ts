@@ -1,3 +1,5 @@
+import { and, desc, eq } from "drizzle-orm";
+
 import { db } from "../db/client.js";
 import { messages } from "../db/schema.js";
 import type { MessageInbound, MessageOutbound } from "../events/types.js";
@@ -36,8 +38,31 @@ export async function registerMessageStore(broker: Broker): Promise<void> {
     // Messages sent from the app are written by the route before publishing,
     // so we only record the Telegram-side id here rather than re-inserting.
     if (e.persisted) {
-      // TODO(phase-4): UPDATE messages SET telegram_message_id = e.telegramMessageId
-      // for the row this event came from, once TelegramSender reports it back.
+      if (e.telegramMessageId) {
+        // The route already inserted the row; TelegramSender relayed it and
+        // reported the Telegram-side id back on this event. Stamp it onto the
+        // most recent message from this sender in this room (the one the route
+        // just wrote).
+        const [row] = await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.chatGroupId, e.chatGroupId),
+              eq(messages.senderUserId, e.senderUserId),
+              eq(messages.platform, "app"),
+            ),
+          )
+          .orderBy(desc(messages.createdAt))
+          .limit(1);
+
+        if (row) {
+          await db
+            .update(messages)
+            .set({ telegramMessageId: e.telegramMessageId })
+            .where(eq(messages.id, row.id));
+        }
+      }
       return;
     }
 

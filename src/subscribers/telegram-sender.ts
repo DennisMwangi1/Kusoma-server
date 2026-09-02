@@ -24,13 +24,17 @@ async function telegramChatIdFor(chatGroupId: string): Promise<number | null> {
 }
 
 export async function registerTelegramSender(broker: Broker): Promise<void> {
-  // Bot replies.
+  // Bot replies — always publish message.outbound even if Telegram is unlinked,
+  // so MessageStore persists the bot reply and AppRealtimeBroadcaster pushes it
+  // to connected Expo clients.
   await subscribeWithRetry(broker, Topics.AIResponse, "telegram-sender", async (msg: Message) => {
     const e = msg.payload as AIResponse;
     const chatId = await telegramChatIdFor(e.chatGroupId);
-    if (chatId === null) return; // Room not linked to Telegram yet — app-only.
 
-    const telegramMessageId = await sendMessage(chatId, e.text);
+    let telegramMessageId: number | undefined;
+    if (chatId !== null) {
+      telegramMessageId = await sendMessage(chatId, e.text);
+    }
 
     const outbound: MessageOutbound = {
       chatGroupId: e.chatGroupId,
@@ -42,10 +46,13 @@ export async function registerTelegramSender(broker: Broker): Promise<void> {
     await appBroker.publish({ topic: Topics.MessageOutbound, payload: outbound });
   });
 
-  // Tutor messages sent from the Expo app.
+  // Tutor messages sent from the Expo app — relay to Telegram and republish
+  // with the telegramMessageId so MessageStore can stamp the row.
   await subscribeWithRetry(broker, Topics.MessageOutbound, "telegram-sender", async (msg: Message) => {
     const e = msg.payload as MessageOutbound;
-    if (e.senderRole !== "tutor" || !e.persisted) return;
+    // Only relay the initial persisted tutor message; skip if telegramMessageId
+    // is already set (that means this is a re-publish from ourselves).
+    if (e.senderRole !== "tutor" || !e.persisted || e.telegramMessageId) return;
 
     const chatId = await telegramChatIdFor(e.chatGroupId);
     if (chatId === null) return;
@@ -56,9 +63,19 @@ export async function registerTelegramSender(broker: Broker): Promise<void> {
       .where(eq(users.id, e.senderUserId))
       .limit(1);
 
-    // The Bot API can only post as the bot itself — it cannot impersonate the
-    // tutor's Telegram identity — so prefix the name to keep attribution
-    // legible to the student (§6.3).
-    await sendMessage(chatId, `${sender?.displayName ?? "Tutor"}: ${e.text}`);
+    // The Bot API can only post as the bot itself — prefix the name for
+    // attribution legibility to the student (§6.3).
+    const telegramMessageId = await sendMessage(
+      chatId,
+      `${sender?.displayName ?? "Tutor"}: ${e.text}`,
+    );
+
+    // Republish so MessageStore records the Telegram-side message id.
+    if (telegramMessageId) {
+      await appBroker.publish({
+        topic: Topics.MessageOutbound,
+        payload: { ...e, telegramMessageId },
+      });
+    }
   });
 }

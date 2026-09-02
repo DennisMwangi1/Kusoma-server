@@ -35,6 +35,8 @@ export const Topics = {
   MessageOutbound: "message.outbound",
   AIRequest: "ai.request",
   AIResponse: "ai.response",
+  /** Published by Analytics after a successful student_performance upsert. */
+  PerformanceRecorded: "performance.recorded",
   AssignmentSuggested: "assignment.suggested",
 } as const;
 

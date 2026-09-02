@@ -1,45 +1,40 @@
-import { AnthropicBedrockMantle } from "@anthropic-ai/bedrock-sdk";
+import Anthropic from "@anthropic-ai/sdk";
 
 import { env } from "../config/env.js";
+import type { ImageBlock } from "./attachments.js";
 
 /**
- * AWS Bedrock client — §9.0.
+ * Anthropic API client — replaces the Bedrock client from the original spec.
  *
- * Credentials and region resolve through the standard AWS precedence:
- * constructor args -> AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY /
- * AWS_SESSION_TOKEN / AWS_REGION -> the AWS config file and credential chain
- * (SSO, assumed roles, ECS task role, IMDS). There is no Anthropic API key.
+ * The Anthropic API supports URL image sources and structured outputs, but we
+ * keep the base64 vision path and trailing-JSON parse for consistency with the
+ * rest of the codebase (attachments.ts already resolves to base64). Request
+ * settings follow §9.0: adaptive thinking plus output_config.effort.
  */
-export const bedrock = new AnthropicBedrockMantle({ awsRegion: env.bedrock.region });
+export const anthropic = new Anthropic({ apiKey: env.anthropic.apiKey });
+
+export const MODEL = env.anthropic.modelId;
 
 /**
- * Bedrock model ids carry an `anthropic.` prefix. Kept in an env var because
- * Opus 5 access is granted per AWS account on Bedrock, while Sonnet 5 and
- * Haiku 4.5 are open to all — so a model change is config, not code.
+ * Vision still goes through base64 — attachments.ts resolves both Telegram
+ * file_ids and URLs to bytes before they reach the model. The Anthropic API
+ * also caps request payload at ~20 MB for vision.
  */
-export const MODEL = env.bedrock.modelId;
+export const MAX_REQUEST_BYTES = 20 * 1024 * 1024;
 
-/**
- * Three Bedrock constraints that shape everything below (§9.0):
- *
- *  1. Vision is base64-only — no URL image sources, no Files API. Both of the
- *     attachment shapes in §5 must be resolved to bytes server-side first.
- *     See services/attachments.ts.
- *  2. No structured outputs — `output_config.format` is unavailable, so the
- *     trailing-JSON-block parse in §9.1 is the mechanism, not a workaround.
- *  3. No server-side tools and no Message Batches. Nothing here needs them.
- *
- * Bedrock also caps a request payload at 20 MB, which you will hit on
- * multi-photo homework long before any token limit.
- */
-export const BEDROCK_MAX_REQUEST_BYTES = 20 * 1024 * 1024;
+export type Effort = "low" | "medium" | "high";
 
-/** Per-path request settings (§9.0). Tunable; these are the starting points. */
+export interface CompletionSettings {
+  max_tokens: number;
+  effort: Effort;
+}
+
+/** Per-path request settings. Tunable; these are the starting points (§9.0). */
 export const AI_SETTINGS = {
   /** Short tutoring turns, and a student is waiting on the reply. */
-  chat: { max_tokens: 2048, effort: "low" },
+  chat: { max_tokens: 2048, effort: "low" } satisfies CompletionSettings,
   /** One call, nobody waiting, quality matters. */
-  advisor: { max_tokens: 4096, effort: "high" },
+  advisor: { max_tokens: 4096, effort: "high" } satisfies CompletionSettings,
 } as const;
 
 export interface CompletionResult {
@@ -48,25 +43,31 @@ export interface CompletionResult {
 }
 
 /**
- * The one real Bedrock call in the scaffold (§16). Prompt assembly (§9.1),
- * vision blocks, and performance-JSON extraction are deliberately NOT here
- * yet — this exists so Phase 5 can prove credentials, region, and model access
- * resolve before anything is built on top of them.
+ * One Anthropic API call. Supports an optional list of image blocks alongside
+ * the user text so the model can see homework photos.
  */
 export async function complete(opts: {
   system: string;
   userText: string;
-  settings?: { max_tokens: number; effort: string };
+  imageBlocks?: ImageBlock[];
+  settings?: CompletionSettings;
 }): Promise<CompletionResult> {
   const settings = opts.settings ?? AI_SETTINGS.chat;
 
-  const response = await bedrock.messages.create({
+  const contentBlocks: Array<{ type: "text"; text: string } | ImageBlock> = [];
+
+  if (opts.imageBlocks?.length) {
+    for (const img of opts.imageBlocks) contentBlocks.push(img);
+  }
+  contentBlocks.push({ type: "text", text: opts.userText });
+
+  const response = await anthropic.messages.create({
     model: MODEL,
     max_tokens: settings.max_tokens,
     system: opts.system,
     thinking: { type: "adaptive" },
-    output_config: { effort: settings.effort as "low" | "medium" | "high" },
-    messages: [{ role: "user", content: opts.userText }],
+    output_config: { effort: settings.effort },
+    messages: [{ role: "user", content: contentBlocks }],
   });
 
   const text = response.content
@@ -81,10 +82,10 @@ export async function complete(opts: {
  * Startup smoke check. Called only when explicitly requested — it costs money,
  * so it is not wired into boot.
  */
-export async function verifyBedrockAccess(): Promise<void> {
+export async function verifyAnthropicAccess(): Promise<void> {
   await complete({
     system: "Reply with the single word: ok",
     userText: "ping",
-    settings: { max_tokens: 16, effort: "low" },
+    settings: { max_tokens: 1024, effort: "low" },
   });
 }

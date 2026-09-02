@@ -33,11 +33,9 @@ export const env = {
     apiKey: process.env.CBC_API_KEY ?? "",
   },
 
-  // AWS Bedrock (§9.0). Credentials themselves are read by the SDK from the
-  // standard AWS chain — we never touch AWS_ACCESS_KEY_ID here.
-  bedrock: {
-    region: process.env.AWS_REGION ?? "us-east-1",
-    modelId: process.env.BEDROCK_MODEL_ID ?? "anthropic.claude-opus-5",
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY ?? "",
+    modelId: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-5",
   },
 } as const;
 
