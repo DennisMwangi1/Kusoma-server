@@ -1,1 +1,11 @@
 node_modules
+dist
+
+# Never commit credentials. .env holds JWT_SECRET and may hold AWS keys —
+# prefer the ambient AWS credential chain over putting keys in here at all.
+.env
+.env.*
+!.env.example
+
+*.log
+.DS_Store

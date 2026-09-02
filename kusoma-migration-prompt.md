@@ -644,7 +644,7 @@ it, and several handlers resolve permissions through it on every request.
 |---|---|
 | `roles` | `tutor`, `guardian`, `student`, `bot` |
 | `permissions` | `students:read`, `students:write`, `guardians:write`, `assignments:read`, `assignments:write`, `messages:read`, `messages:send`, `curriculum:read`, `dashboard:read` |
-| `role_permissions` | `tutor` → all nine. `guardian` → `students:read`, `assignments:read`, `messages:read` **only** (this is what makes parents read-only at the data layer, §15). `student` and `bot` → none; neither has an app session. |
+| `role_permissions` | `tutor` → all nine. `guardian` → the four `:read` keys **only** — `students:read`, `assignments:read`, `messages:read`, `dashboard:read` — and no `:write` or `:send` (this is what makes parents read-only at the data layer, §15). `dashboard:read` is included on purpose: `GET /dashboard/summary` is computed across whatever students the caller is related to, so for a guardian it degrades to their own child's numbers rather than 403-ing (§8.2), which is their landing screen. `student` and `bot` → none; neither has an app session. |
 | bot user | `display_name: 'Kusoma Bot'`, `phone: NULL`, `password_hash: NULL`, role `bot`. Giving the bot a real `users` row is what lets `messages.sender_user_id` be `NOT NULL` and `chat_participants` stay uniform. |
 | dev tutor | `phone: '0700000000'`, `password: 'kusoma-dev'`, role `tutor` (§11) |
 
@@ -1259,9 +1259,10 @@ Build these against the API in §8, using the component-reuse mapping in
    /onboarding/complete` → Dashboard. Don't make step 3 feel like a
    required gate.
 3. **Dashboard** — 2×2 summary cards (Active Students, Engaged Today,
-   Total Problems, Avg. Accuracy) from `GET /dashboard/summary` (tutor
-   only — a guardian's "dashboard" is really just their one student's
-   detail view, see below), plus a student list from `GET /students`:
+   Total Problems, Avg. Accuracy) from `GET /dashboard/summary`. A guardian
+   gets this screen too: the endpoint computes across whatever students the
+   caller is related to, so it degrades to their own child's numbers with no
+   role branch on either side (§8.2). Plus a student list from `GET /students`:
    name, grade, status pill (green <24h / yellow <72h / red otherwise),
    current topic or "No topic assigned", accuracy %. Tap → Student Detail.
    FAB → add-student flow (tutor only).

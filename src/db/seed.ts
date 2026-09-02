@@ -29,13 +29,20 @@ const ROLE_ROWS: Array<{ key: RoleKey; name: string; description: string }> = [
 ];
 
 /**
- * Guardians get the three :read keys and nothing else — this is what makes
- * parents read-only at the data layer rather than by hiding buttons (§15).
+ * Guardians get :read keys and nothing else — no :write, no :send. That is
+ * what makes parents read-only at the data layer rather than by hiding
+ * buttons (§15).
+ *
+ * dashboard:read is included deliberately: GET /dashboard/summary is computed
+ * across whatever students the caller is related to, so for a guardian it
+ * degrades to their own child's numbers rather than 403-ing (§8.2). That is
+ * the parent's landing screen, and it needs no special case on either side.
+ *
  * Students and the bot get none; neither has an app session.
  */
 const GRANTS: Record<RoleKey, readonly PermissionKey[]> = {
   tutor: PERMISSION_KEYS,
-  guardian: ["students:read", "assignments:read", "messages:read"],
+  guardian: ["students:read", "assignments:read", "messages:read", "dashboard:read"],
   student: [],
   bot: [],
 };
