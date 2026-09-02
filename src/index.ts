@@ -5,6 +5,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { broker } from "./app-broker.js";
 import { env } from "./config/env.js";
 import { pool } from "./db/client.js";
+import { checkReadiness, reportReadiness } from "./db/readiness.js";
 import { HttpError } from "./lib/errors.js";
 import { attachRealtime } from "./realtime/hub.js";
 import { assignmentsRouter } from "./routes/assignments.js";
@@ -23,6 +24,16 @@ const app = express();
 app.use(express.json({ limit: "2mb" }));
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
+
+/**
+ * Deeper than /health: actually touches Postgres and reports whether the
+ * schema and seed are in place. Use this when the server and the database are
+ * on different machines and a request is 500-ing for no obvious reason.
+ */
+app.get("/health/db", async (_req, res) => {
+  const readiness = await checkReadiness();
+  res.status(readiness.ok ? 200 : 503).json(readiness);
+});
 
 app.use("/auth", authRouter);
 app.use("/students", studentsRouter);
@@ -48,6 +59,13 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 const server = createServer(app);
 
 async function main(): Promise<void> {
+  // Report an un-migrated or un-seeded database at boot, naming the fix,
+  // rather than letting it surface later as an opaque 500.
+  reportReadiness(await checkReadiness().catch((err) => ({
+    ok: false,
+    problems: [`Readiness check itself failed: ${String(err)}`],
+  })));
+
   await registerSubscribers(broker);
   attachRealtime(server);
 
