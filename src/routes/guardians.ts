@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "../db/client.js";
 import { chatGroups, chatParticipants, userRelationships, userRoles, users } from "../db/schema.js";
 import { badRequest, conflict, notFound } from "../lib/errors.js";
+import { param } from "../lib/http.js";
 import { authenticate } from "../middleware/authenticate.js";
 import { requirePermission } from "../middleware/require-permission.js";
 import { isTutorOf, scopeStudent } from "../middleware/scope-student.js";
@@ -29,7 +30,7 @@ const createBody = z.object({
  */
 guardiansRouter.post("/", requirePermission("guardians:write"), async (req, res, next) => {
   try {
-    const studentUserId = req.params.id!;
+    const studentUserId = param(req, "id");
     const kinds = await scopeStudent(req.user!, studentUserId);
     if (!isTutorOf(kinds)) throw badRequest("Only the owning tutor can add a guardian");
 

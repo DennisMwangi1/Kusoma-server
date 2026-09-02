@@ -7,6 +7,7 @@ import { db } from "../db/client.js";
 import { chatGroups, chatParticipants, messages, users } from "../db/schema.js";
 import type { MessageOutbound } from "../events/types.js";
 import { badRequest, forbidden, notFound } from "../lib/errors.js";
+import { param } from "../lib/http.js";
 import { authenticate } from "../middleware/authenticate.js";
 import { requirePermission } from "../middleware/require-permission.js";
 import { scopeStudent } from "../middleware/scope-student.js";
@@ -33,8 +34,8 @@ async function groupForStudent(studentUserId: string) {
 /** GET /students/:id/messages?before=&limit= — paginated history. */
 messagesRouter.get("/", requirePermission("messages:read"), async (req, res, next) => {
   try {
-    await scopeStudent(req.user!, req.params.id!);
-    const group = await groupForStudent(req.params.id!);
+    await scopeStudent(req.user!, param(req, "id"));
+    const group = await groupForStudent(param(req, "id"));
 
     const limit = Math.min(Number(req.query.limit ?? 50), 100);
     const before = req.query.before ? new Date(String(req.query.before)) : null;
@@ -76,8 +77,8 @@ messagesRouter.get("/", requirePermission("messages:read"), async (req, res, nex
  */
 messagesRouter.post("/", requirePermission("messages:send"), async (req, res, next) => {
   try {
-    await scopeStudent(req.user!, req.params.id!);
-    const group = await groupForStudent(req.params.id!);
+    await scopeStudent(req.user!, param(req, "id"));
+    const group = await groupForStudent(param(req, "id"));
 
     const [participant] = await db
       .select({ canPost: chatParticipants.canPost })

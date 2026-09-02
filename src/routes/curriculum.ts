@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import { badRequest } from "../lib/errors.js";
+import { param } from "../lib/http.js";
 import { authenticate } from "../middleware/authenticate.js";
 import { requirePermission } from "../middleware/require-permission.js";
 import { getCurriculumNode, getCurriculumTree } from "../services/cbc-api-client.js";
@@ -16,7 +17,7 @@ curriculumRouter.use(authenticate);
  */
 curriculumRouter.get("/node/:id", requirePermission("curriculum:read"), async (req, res, next) => {
   try {
-    res.json({ data: await getCurriculumNode(req.params.id!) });
+    res.json({ data: await getCurriculumNode(param(req, "id")) });
   } catch (err) {
     next(err);
   }
@@ -25,9 +26,9 @@ curriculumRouter.get("/node/:id", requirePermission("curriculum:read"), async (r
 /** GET /curriculum/:grade/:subject — proxied to the CBC API (§10). */
 curriculumRouter.get("/:grade/:subject", requirePermission("curriculum:read"), async (req, res, next) => {
   try {
-    const grade = Number(req.params.grade);
+    const grade = Number(param(req, "grade"));
     if (!Number.isInteger(grade) || grade < 1 || grade > 13) throw badRequest("Grade must be 1-13");
-    res.json({ data: await getCurriculumTree(grade, req.params.subject!) });
+    res.json({ data: await getCurriculumTree(grade, param(req, "subject")) });
   } catch (err) {
     next(err);
   }

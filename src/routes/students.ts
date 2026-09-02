@@ -14,6 +14,7 @@ import {
   users,
 } from "../db/schema.js";
 import { badRequest, notFound } from "../lib/errors.js";
+import { param } from "../lib/http.js";
 import { authenticate } from "../middleware/authenticate.js";
 import { requirePermission } from "../middleware/require-permission.js";
 import { isTutorOf, listRelatedStudentIds, scopeStudent } from "../middleware/scope-student.js";
@@ -162,9 +163,9 @@ studentsRouter.post("/", requirePermission("students:write"), async (req, res, n
 /** GET /students/:id — profile + active assignment + performance. */
 studentsRouter.get("/:id", requirePermission("students:read"), async (req, res, next) => {
   try {
-    await scopeStudent(req.user!, req.params.id!);
+    await scopeStudent(req.user!, param(req, "id"));
 
-    const [student] = await db.select().from(users).where(eq(users.id, req.params.id!)).limit(1);
+    const [student] = await db.select().from(users).where(eq(users.id, param(req, "id"))).limit(1);
     if (!student) throw notFound("Student not found");
 
     const assignmentRows = await db
@@ -206,7 +207,7 @@ studentsRouter.get("/:id", requirePermission("students:read"), async (req, res, 
 /** PATCH /students/:id — a guardian's token cannot reach this (no :write). */
 studentsRouter.patch("/:id", requirePermission("students:write"), async (req, res, next) => {
   try {
-    const kinds = await scopeStudent(req.user!, req.params.id!);
+    const kinds = await scopeStudent(req.user!, param(req, "id"));
     if (!isTutorOf(kinds)) throw badRequest("Only the owning tutor can edit a student");
 
     const parsed = patchBody.safeParse(req.body);
@@ -221,7 +222,7 @@ studentsRouter.patch("/:id", requirePermission("students:write"), async (req, re
         ...(phone !== undefined && { phone }),
         updatedAt: new Date(),
       })
-      .where(eq(users.id, req.params.id!))
+      .where(eq(users.id, param(req, "id")))
       .returning();
 
     res.json({ student: updated });
@@ -233,13 +234,13 @@ studentsRouter.patch("/:id", requirePermission("students:write"), async (req, re
 /** DELETE /students/:id — soft delete (users.is_active = false). */
 studentsRouter.delete("/:id", requirePermission("students:write"), async (req, res, next) => {
   try {
-    const kinds = await scopeStudent(req.user!, req.params.id!);
+    const kinds = await scopeStudent(req.user!, param(req, "id"));
     if (!isTutorOf(kinds)) throw badRequest("Only the owning tutor can remove a student");
 
     await db
       .update(users)
       .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(users.id, req.params.id!));
+      .where(eq(users.id, param(req, "id")));
 
     res.status(204).end();
   } catch (err) {
