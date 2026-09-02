@@ -147,12 +147,36 @@ function extractAttachments(msg: NonNullable<TelegramUpdate["message"]>): Attach
   return out;
 }
 
-/** Bind telegram_chat_id onto the room that already exists for this student. */
-async function bindChat(studentUserId: string, chatId: number, title?: string): Promise<void> {
-  await db
+/**
+ * Bind telegram_chat_id onto the room that already exists for this student.
+ *
+ * Returns the student's name on success, null when there is no such student.
+ * A `/start` carrying a stale id — a deleted student, or one copied from a
+ * different environment's database — used to update zero rows and still get a
+ * cheerful "this group is now linked" reply. The group stayed unbound, so
+ * every later message fell out at the `if (!group) return` below and the bot
+ * simply went quiet, which is indistinguishable from the webhook being down.
+ * Fail loudly instead.
+ */
+async function bindChat(
+  studentUserId: string,
+  chatId: number,
+  title?: string,
+): Promise<string | null> {
+  const [student] = await db
+    .select({ displayName: users.displayName })
+    .from(users)
+    .where(eq(users.id, studentUserId))
+    .limit(1);
+  if (!student) return null;
+
+  const bound = await db
     .update(chatGroups)
     .set({ telegramChatId: chatId, ...(title && { title }) })
-    .where(eq(chatGroups.studentUserId, studentUserId));
+    .where(eq(chatGroups.studentUserId, studentUserId))
+    .returning({ id: chatGroups.id });
+
+  return bound.length > 0 ? student.displayName : null;
 }
 
 /**
@@ -199,13 +223,7 @@ async function tryClaimStudent(
   return sender;
 }
 
-async function welcomeStudent(chatId: number, studentUserId: string): Promise<void> {
-  const [student] = await db
-    .select({ displayName: users.displayName })
-    .from(users)
-    .where(eq(users.id, studentUserId))
-    .limit(1);
-  const name = student?.displayName ?? "student";
+async function welcomeStudent(chatId: number, name: string): Promise<void> {
   await sendMessage(
     chatId,
     `👋 Welcome to Kusoma! This group is now linked for ${name}.\n\n` +
@@ -215,7 +233,7 @@ async function welcomeStudent(chatId: number, studentUserId: string): Promise<vo
   );
 }
 
-async function handleIamParent(chatId: number, fromId: number): Promise<void> {
+async function handleIamParent(chatId: number, fromId: number, inGroup: boolean): Promise<void> {
   const [group] = await db
     .select()
     .from(chatGroups)
@@ -226,9 +244,14 @@ async function handleIamParent(chatId: number, fromId: number): Promise<void> {
       await requestParentContact(chatId);
       return;
     }
+    // In a group this used to read "run /iamparent in the student's group" —
+    // advice the parent was already following. The real cause is that *this*
+    // group was never bound, so say that instead.
     await sendMessage(
       chatId,
-      "Run /iamparent in the student's Telegram group first. You can then share your number here.",
+      inGroup
+        ? "This group isn't linked to a student yet. Send the /start command from the student's page in the Kusoma app, then try /iamparent again."
+        : "Run /iamparent in the student's Telegram group first. You can then share your number here.",
     );
     return;
   }
@@ -390,7 +413,16 @@ telegramWebhookRouter.post("/telegram", async (req, res) => {
         return;
       }
 
-      await bindChat(startStudentId, msg.chat.id, msg.chat.title);
+      const studentName = await bindChat(startStudentId, msg.chat.id, msg.chat.title);
+      if (!studentName) {
+        await sendMessage(
+          msg.chat.id,
+          "That link is out of date — I couldn't find this student.\n\n" +
+            "Open the Kusoma app, go to the student, and copy the /start command " +
+            "shown there. (A student who has been removed can't be re-linked.)",
+        );
+        return;
+      }
 
       const [group] = await db
         .select()
@@ -414,7 +446,7 @@ telegramWebhookRouter.post("/telegram", async (req, res) => {
         }
       }
 
-      await welcomeStudent(msg.chat.id, startStudentId);
+      await welcomeStudent(msg.chat.id, studentName);
       return;
     }
 
@@ -458,6 +490,12 @@ telegramWebhookRouter.post("/telegram", async (req, res) => {
               `*Grade:* ${student?.grade ?? "N/A"}\n\n` +
               `Open the Kusoma app for detailed performance data.`,
           );
+        } else {
+          await sendMessage(
+            msg.chat.id,
+            "This group isn't linked to a student yet. Send the /start command " +
+              "from the student's page in the Kusoma app.",
+          );
         }
         return;
       }
@@ -469,7 +507,7 @@ telegramWebhookRouter.post("/telegram", async (req, res) => {
         return;
       }
       if (cmd === "/iamparent") {
-        if (msg.from?.id) await handleIamParent(msg.chat.id, msg.from.id);
+        if (msg.from?.id) await handleIamParent(msg.chat.id, msg.from.id, groupChat);
         return;
       }
     }

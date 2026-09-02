@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 
 import { hashPassword } from "../lib/password.js";
 import { db, pool } from "./client.js";
@@ -47,7 +47,15 @@ const GRANTS: Record<RoleKey, readonly PermissionKey[]> = {
   bot: [],
 };
 
-export const DEV_TUTOR = { phone: "0700000000", password: "kusoma-dev", displayName: "Dev Tutor" };
+export const DEV_TUTOR = { phone: "+254102035479", password: "kusoma-dev", displayName: "Dev Tutor" };
+
+/**
+ * Phones this tutor has been seeded under before. Renaming DEV_TUTOR.phone
+ * would otherwise strand the existing account — and its whole roster, chat
+ * groups and transcripts — behind a number nobody logs in with any more,
+ * while seeding a second, empty tutor beside it.
+ */
+const DEV_TUTOR_LEGACY_PHONES = ["0700000000"];
 
 export async function seed(): Promise<void> {
   await db.transaction(async (tx) => {
@@ -98,6 +106,31 @@ export async function seed(): Promise<void> {
       .limit(1);
 
     if (existingDev.length === 0) {
+      // Carry a previously-seeded dev tutor onto the current number rather
+      // than leaving their students behind on the old one.
+      const [legacy] = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(inArray(users.phone, DEV_TUTOR_LEGACY_PHONES))
+        .limit(1);
+      if (legacy) {
+        await tx
+          .update(users)
+          .set({ phone: DEV_TUTOR.phone, updatedAt: new Date() })
+          .where(eq(users.id, legacy.id));
+        console.log(
+          `seed: moved dev tutor to ${DEV_TUTOR.phone} (roster preserved)`,
+        );
+      }
+    }
+
+    const stillMissing = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.phone, DEV_TUTOR.phone))
+      .limit(1);
+
+    if (stillMissing.length === 0) {
       const [dev] = await tx
         .insert(users)
         .values({
