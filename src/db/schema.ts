@@ -38,7 +38,10 @@ export const users = pgTable(
     displayName: text("display_name").notNull(),
     /** NULL only for the seeded bot user. */
     phone: text("phone"),
-    /** Lazily captured on first message in a linked group (§7). */
+    /**
+     * Student (and optionally guardian via /iamparent). The tutor uses the app —
+     * we do not stamp them from Telegram /start.
+     */
     telegramUserId: bigint("telegram_user_id", { mode: "number" }).unique(),
     /** NULL = cannot log in (students, bot). */
     passwordHash: text("password_hash"),

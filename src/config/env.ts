@@ -21,7 +21,7 @@ export const env = {
   databaseUrl: required("DATABASE_URL"),
   jwtSecret: required("JWT_SECRET"),
 
-  backendUrl: process.env.BACKEND_URL ?? "",
+  backendUrl: (process.env.BACKEND_URL ?? "").replace(/\/$/, ""),
 
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN ?? "",

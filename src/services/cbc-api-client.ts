@@ -66,42 +66,118 @@ function unwrapList(body: unknown): Json[] {
   return [];
 }
 
+function str(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function listField(raw: Json, ...keys: string[]): unknown[] | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (Array.isArray(value)) return value;
+  }
+  return undefined;
+}
+
+function isStrandLike(raw: Json): boolean {
+  return (
+    listField(raw, "sub_strands", "subStrands", "learning_outcomes", "learningOutcomes", "children") !=
+    null
+  );
+}
+
 function mapNode(raw: Json, fallback: { strand?: string; subStrand?: string } = {}): CurriculumNode {
+  const activities = listField(raw, "suggested_activities", "suggestedActivities");
   return {
-    id: String(raw.id ?? ""),
-    strand: String(raw.strand ?? fallback.strand ?? ""),
-    subStrand: String(raw.sub_strand ?? raw.subStrand ?? fallback.subStrand ?? ""),
-    learningOutcome: String(raw.learning_outcome ?? raw.learningOutcome ?? raw.outcome ?? ""),
-    teachingApproach: typeof raw.description === "string" ? raw.description : undefined,
+    id: str(raw.id),
+    strand: str(raw.strand ?? raw.name ?? fallback.strand),
+    subStrand: str(raw.sub_strand ?? raw.subStrand ?? fallback.subStrand),
+    learningOutcome: str(
+      raw.learning_outcome ?? raw.learningOutcome ?? raw.outcome ?? raw.title,
+    ),
+    teachingApproach:
+      typeof raw.teaching_approach === "string"
+        ? raw.teaching_approach
+        : typeof raw.teachingApproach === "string"
+          ? raw.teachingApproach
+          : typeof raw.description === "string"
+            ? raw.description
+            : undefined,
+    suggestedActivities: activities?.every((a) => typeof a === "string")
+      ? (activities as string[])
+      : undefined,
   };
 }
 
-/** CBC returns `{ subject, grade, strands: [{ name, sub_strands: [{ name, learning_outcomes }] }] }`. */
-function flattenTree(body: unknown): CurriculumNode[] {
-  if (Array.isArray(body)) return body.map((row) => mapNode(asRecord(row)));
-
+function flattenStrands(strands: unknown[], fallbackStrand = ""): CurriculumNode[] {
   const out: CurriculumNode[] = [];
-  const strands = asRecord(body).strands;
-  if (!Array.isArray(strands)) return out;
 
   for (const strand of strands) {
     const s = asRecord(strand);
-    const strandName = String(s.name ?? s.strand ?? "");
-    const subs = s.sub_strands ?? s.subStrands;
-    if (!Array.isArray(subs)) continue;
+    const strandName = str(s.name ?? s.strand ?? fallbackStrand);
+    const subs = listField(s, "sub_strands", "subStrands");
+    const outcomes = listField(s, "learning_outcomes", "learningOutcomes", "children");
 
-    for (const sub of subs) {
-      const ss = asRecord(sub);
-      const subName = String(ss.name ?? ss.sub_strand ?? ss.subStrand ?? "");
-      const outcomes = ss.learning_outcomes ?? ss.learningOutcomes;
-      if (!Array.isArray(outcomes)) continue;
-
-      for (const outcome of outcomes) {
-        out.push(mapNode(asRecord(outcome), { strand: strandName, subStrand: subName }));
+    if (subs) {
+      for (const sub of subs) {
+        const ss = asRecord(sub);
+        const subName = str(ss.name ?? ss.sub_strand ?? ss.subStrand);
+        const nested = listField(ss, "learning_outcomes", "learningOutcomes", "children");
+        if (nested) {
+          for (const outcome of nested) {
+            out.push(mapNode(asRecord(outcome), { strand: strandName, subStrand: subName }));
+          }
+        } else if (ss.id || ss.learning_outcome || ss.learningOutcome || ss.outcome) {
+          out.push(mapNode(ss, { strand: strandName, subStrand: subName }));
+        }
       }
+      continue;
     }
+
+    if (outcomes) {
+      for (const outcome of outcomes) {
+        out.push(mapNode(asRecord(outcome), { strand: strandName, subStrand: strandName }));
+      }
+      continue;
+    }
+
+    out.push(mapNode(s, { strand: strandName }));
   }
+
   return out;
+}
+
+function unwrapBody(body: unknown): unknown {
+  if (body == null || Array.isArray(body)) return body;
+  const rec = asRecord(body);
+  if (rec.data !== undefined) return unwrapBody(rec.data);
+  if (rec.results !== undefined && rec.strands === undefined) return unwrapBody(rec.results);
+  return body;
+}
+
+/**
+ * CBC returns `{ subject, grade, strands: [{ name, sub_strands: [{ name, learning_outcomes: [{ id, outcome }] }] }] }`.
+ * Also accepts a flat node list, a strands array, or `{ data }` / `{ results }` wrappers.
+ */
+function flattenTree(body: unknown): CurriculumNode[] {
+  const root = unwrapBody(body);
+
+  if (Array.isArray(root)) {
+    if (root.length === 0) return [];
+    const first = asRecord(root[0]);
+    if (isStrandLike(first) && !(first.learning_outcome || first.learningOutcome || first.outcome)) {
+      return flattenStrands(root);
+    }
+    return root.map((row) => mapNode(asRecord(row)));
+  }
+
+  const rec = asRecord(root);
+  const strands = listField(rec, "strands");
+  if (strands) return flattenStrands(strands);
+
+  if (rec.id || rec.learning_outcome || rec.learningOutcome || rec.outcome) {
+    return [mapNode(rec)];
+  }
+  return [];
 }
 
 function mapContent(raw: Json): ContentResult {

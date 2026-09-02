@@ -1,6 +1,7 @@
-import { Bot } from "grammy";
+import { Bot, Keyboard } from "grammy";
 
 import { env, isTelegramConfigured } from "../config/env.js";
+import { telegramStartPayload } from "../lib/uuid.js";
 
 /**
  * Telegram Bot API access — §7.
@@ -9,6 +10,14 @@ import { env, isTelegramConfigured } from "../config/env.js";
  * unset (§16: a scaffold has to run on a laptop with half the integrations
  * unconfigured).
  */
+
+/** Rights requested when adding the bot via startgroup — needed to see joins. */
+export const TELEGRAM_STARTGROUP_ADMIN =
+  "invite_users+pin_messages+delete_messages+restrict_members";
+
+export function botUsername(): string {
+  return env.telegram.botUsername.replace(/^@/, "");
+}
 
 let bot: Bot | null = null;
 
@@ -26,19 +35,62 @@ export async function registerWebhook(): Promise<void> {
     return;
   }
   const url = `${env.backendUrl.replace(/\/$/, "")}/webhook/telegram`;
-  await b.api.setWebhook(url, { allowed_updates: ["message"] });
+  await b.api.setWebhook(url, {
+    allowed_updates: ["message", "chat_member", "my_chat_member"],
+  });
   console.log(`telegram: webhook set to ${url}`);
+  console.warn(
+    "telegram: BotFather → Groups: Enable, Privacy: Disable — otherwise student messages never reach the bot",
+  );
 }
 
-/** The t.me deep link the tutor taps to create the group (§7). */
-export const buildDeepLink = (studentUserId: string): string =>
-  `https://t.me/${env.telegram.botUsername}?startgroup=${studentUserId}`;
+/**
+ * Deep link that asks Telegram to add the bot to a group (picker includes
+ * New Group on mobile). Payload is the student UUID without hyphens —
+ * startgroup is base64url-ish and dashed UUIDs often open a blank picker or
+ * a private chat instead.
+ */
+export const buildDeepLink = (studentUserId: string): string => {
+  const bot = botUsername();
+  const payload = telegramStartPayload(studentUserId);
+  return `https://t.me/${bot}?startgroup=${payload}&admin=${TELEGRAM_STARTGROUP_ADMIN}`;
+};
 
-export async function sendMessage(chatId: number, text: string): Promise<number | undefined> {
+export const buildNativeDeepLink = (studentUserId: string): string => {
+  const bot = botUsername();
+  const payload = telegramStartPayload(studentUserId);
+  return `tg://resolve?domain=${bot}&startgroup=${payload}&admin=${TELEGRAM_STARTGROUP_ADMIN}`;
+};
+
+export async function sendMessage(
+  chatId: number,
+  text: string,
+  extra?: { reply_markup?: { remove_keyboard: true } },
+): Promise<number | undefined> {
   const b = getBot();
   if (!b) return undefined;
-  const sent = await b.api.sendMessage(chatId, text);
+  const sent = await b.api.sendMessage(chatId, text, extra);
   return sent.message_id;
+}
+
+/** One-time keyboard so the parent shares *their* Telegram contact (includes user_id). */
+export async function requestParentContact(chatId: number): Promise<void> {
+  const b = getBot();
+  if (!b) return;
+  const text =
+    "To link as this student's parent, share the phone number on your Kusoma parent account.\n\n" +
+    "In the group: paperclip → Contact → pick yourself.\n" +
+    "Or message me privately — Telegram only shows a Share-number button in a private chat.";
+  const keyboard = new Keyboard()
+    .requestContact("Share my Kusoma number")
+    .resized()
+    .oneTime();
+  try {
+    await b.api.sendMessage(chatId, text, { reply_markup: keyboard });
+  } catch (err) {
+    console.warn("telegram: request-contact keyboard failed (normal in groups)", err);
+    await b.api.sendMessage(chatId, text);
+  }
 }
 
 /**
