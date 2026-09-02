@@ -101,8 +101,8 @@ async function main(): Promise<void> {
   await registerSubscribers(broker);
   attachRealtime(server);
 
-  server.listen(env.port, () => {
-    console.log(`kusoma-server listening on :${env.port}`);
+  server.listen(env.port, "0.0.0.0", () => {
+    console.log(`kusoma-server listening on 0.0.0.0:${env.port}`);
     console.log(`  anthropic: ${env.anthropic.modelId}`);
   });
 
