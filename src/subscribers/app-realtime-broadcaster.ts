@@ -1,0 +1,43 @@
+import type { MessageInbound, MessageOutbound } from "../events/types.js";
+import type { Broker, Message } from "../pkg/broker/broker.js";
+import { Topics } from "../pkg/broker/broker.js";
+import { subscribeWithRetry } from "../pkg/broker/retry.js";
+import { hub } from "../realtime/hub.js";
+
+/**
+ * AppRealtimeBroadcaster — pushes messages to connected Expo clients (§6.3).
+ *
+ * Recipients come from chat_participants (resolved inside the Hub), NOT from a
+ * role branch. If a guardian is added to a student later, they start receiving
+ * live frames because a row exists — no change here.
+ *
+ * This and TelegramSender are two independent subscribers to the same event,
+ * which is what stops the WS layer and the Telegram relay from drifting apart.
+ */
+export async function registerAppRealtimeBroadcaster(broker: Broker): Promise<void> {
+  await subscribeWithRetry(broker, Topics.MessageInbound, "app-realtime", async (msg: Message) => {
+    const e = msg.payload as MessageInbound;
+    hub.broadcast(e.chatGroupId, "message", {
+      chatGroupId: e.chatGroupId,
+      senderUserId: e.senderUserId,
+      senderRole: e.senderRole,
+      platform: e.platform,
+      content: e.text,
+      attachments: e.attachments,
+      createdAt: e.timestamp,
+    });
+  });
+
+  await subscribeWithRetry(broker, Topics.MessageOutbound, "app-realtime", async (msg: Message) => {
+    const e = msg.payload as MessageOutbound;
+    hub.broadcast(e.chatGroupId, "message", {
+      chatGroupId: e.chatGroupId,
+      senderUserId: e.senderUserId,
+      senderRole: e.senderRole,
+      platform: "app",
+      content: e.text,
+      attachments: e.attachments ?? [],
+      createdAt: new Date(),
+    });
+  });
+}
