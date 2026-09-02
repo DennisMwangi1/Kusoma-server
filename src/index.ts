@@ -21,6 +21,38 @@ import { registerWebhook } from "./services/telegram.js";
 import { registerSubscribers } from "./subscribers/index.js";
 
 const app = express();
+
+/**
+ * CORS. The Expo app runs on web (Metro serves it from http://localhost:8081)
+ * as well as native, and a browser will not hand a cross-origin response to
+ * JS without these headers — so without this middleware `POST /auth/login`
+ * succeeds on the server, returns 200, and is still discarded by the browser
+ * before the client ever sees the token. curl doesn't enforce CORS, which is
+ * why the endpoint tests fine from a terminal and fails in the app.
+ *
+ * Reflecting the request's own Origin (rather than "*") keeps the door open
+ * for cookie/credentialed requests later; "*" is invalid once credentials are
+ * involved. This is prototype-appropriate — before anything real ships, pin
+ * this to a known origin list.
+ */
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PATCH,PUT,DELETE,OPTIONS",
+  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  res.setHeader("Access-Control-Max-Age", "86400");
+  // Answer the preflight here — it must not fall through to the routers,
+  // which would 404 it (Express's default OPTIONS handler replies 200 with no
+  // CORS headers, which the browser reads as "preflight failed").
+  if (req.method === "OPTIONS") return res.status(204).end();
+  next();
+});
+
 app.use(express.json({ limit: "2mb" }));
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
